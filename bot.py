@@ -300,6 +300,27 @@ async def anonymous_chat(message: Message):
             "Нажми ⏭ Следующий.",
             reply_markup=chat_keyboard
         )
+ADMIN_ID = 6624599495
+
+@dp.message(F.text == "/stats")
+async def stats(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    total_users = len(users)
+    males = sum(1 for gender in users.values() if gender == "male")
+    females = sum(1 for gender in users.values() if gender == "female")
+    searching_now = len(searching)
+    chatting_now = len(partners) // 2
+
+    await message.answer(
+        "📊 Статистика бота\n\n"
+        f"👥 Всего пользователей: {total_users}\n"
+        f"👨 Мужчин: {males}\n"
+        f"👩 Женщин: {females}\n"
+        f"🔎 Ищут собеседника: {searching_now}\n"
+        f"💬 Сейчас общаются: {chatting_now}"
+    )
 
 
 # =========================
