@@ -1,5 +1,6 @@
 import asyncio
 import os
+import json
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
@@ -7,6 +8,9 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
 
 TOKEN = os.getenv("TOKEN")
+
+# Твой Telegram ID
+ADMIN_ID = 6624599495
 
 dp = Dispatcher()
 
@@ -18,6 +22,26 @@ searching = set()
 
 # Пары: user_id -> user_id
 partners = {}
+
+
+# =========================
+# Загрузка пользователей
+# =========================
+
+try:
+    with open("users.json", "r", encoding="utf-8") as f:
+        users = json.load(f)
+
+    # JSON сохраняет ключи как строки
+    users = {int(user_id): gender for user_id, gender in users.items()}
+
+except (FileNotFoundError, json.JSONDecodeError):
+    users = {}
+
+
+def save_users():
+    with open("users.json", "w", encoding="utf-8") as f:
+        json.dump(users, f, ensure_ascii=False)
 
 
 def gender_keyboard():
@@ -44,9 +68,18 @@ def chat_keyboard():
     )
 
 
+# =========================
+# /start
+# =========================
+
 @dp.message(CommandStart())
 async def start(message: Message):
     user_id = message.from_user.id
+
+    # Добавляем нового пользователя
+    if user_id not in users:
+        users[user_id] = None
+        save_users()
 
     await message.answer(
         "👋 Добро пожаловать в анонимный чат!\n\n"
@@ -54,6 +87,10 @@ async def start(message: Message):
         reply_markup=gender_keyboard()
     )
 
+
+# =========================
+# Выбор пола
+# =========================
 
 @dp.message(F.text.in_({"👨 Мужчина", "👩 Женщина"}))
 async def choose_gender(message: Message):
@@ -64,6 +101,8 @@ async def choose_gender(message: Message):
     else:
         users[user_id] = "female"
 
+    save_users()
+
     await message.answer(
         "✅ Пол выбран.\n\n"
         "🔎 Ищу собеседника...",
@@ -73,14 +112,16 @@ async def choose_gender(message: Message):
     await find_partner(message)
 
 
+# =========================
+# Поиск собеседника
+# =========================
+
 async def find_partner(message: Message):
     user_id = message.from_user.id
 
-    # Если пользователь уже в чате
     if user_id in partners:
         return
 
-    # Проверяем ожидающих пользователей
     for other_id in list(searching):
         if other_id == user_id:
             continue
@@ -88,7 +129,6 @@ async def find_partner(message: Message):
         if other_id not in users:
             continue
 
-        # Нашли пару
         searching.discard(other_id)
         searching.discard(user_id)
 
@@ -116,6 +156,10 @@ async def find_partner(message: Message):
     searching.add(user_id)
 
 
+# =========================
+# Следующий собеседник
+# =========================
+
 @dp.message(F.text == "⏭ Следующий")
 async def next_chat(message: Message):
     user_id = message.from_user.id
@@ -139,6 +183,10 @@ async def next_chat(message: Message):
     await message.answer("🔎 Ищу нового собеседника...")
     await find_partner(message)
 
+
+# =========================
+# Завершить чат
+# =========================
 
 @dp.message(F.text == "🛑 Завершить")
 async def end_chat(message: Message):
@@ -164,6 +212,32 @@ async def end_chat(message: Message):
     )
 
 
+# =========================
+# Статистика
+# =========================
+
+@dp.message(F.text == "/stats")
+async def stats(message: Message):
+    # Только для владельца бота
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    total_users = len(users)
+    searching_users = len(searching)
+    active_chats = len(partners) // 2
+
+    await message.answer(
+        "📊 Статистика бота\n\n"
+        f"👥 Всего пользователей: {total_users}\n"
+        f"🔎 Ищут собеседника: {searching_users}\n"
+        f"💬 Сейчас в чатах: {active_chats}"
+    )
+
+
+# =========================
+# Анонимные сообщения
+# =========================
+
 @dp.message()
 async def anonymous_message(message: Message):
     user_id = message.from_user.id
@@ -187,6 +261,10 @@ async def anonymous_message(message: Message):
             "⚠️ Не удалось отправить сообщение."
         )
 
+
+# =========================
+# Запуск
+# =========================
 
 async def main():
     if not TOKEN:
