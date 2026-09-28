@@ -26,6 +26,10 @@ searching = set()
 partners = {}
 
 
+# ID администратора
+ADMIN_ID = 6624599495
+
+
 # =========================
 # КЛАВИАТУРЫ
 # =========================
@@ -57,6 +61,7 @@ chat_keyboard = ReplyKeyboardMarkup(
 # =========================
 
 def find_partner(user_id):
+
     my_gender = users.get(user_id)
 
     if not my_gender:
@@ -72,7 +77,7 @@ def find_partner(user_id):
         if not other_gender:
             continue
 
-        # Ищем только противоположный пол
+        # Только противоположный пол
         if my_gender != other_gender:
             return other_id
 
@@ -253,6 +258,42 @@ async def stop_chat(message: Message):
 
 
 # =========================
+# СТАТИСТИКА
+# =========================
+
+@dp.message(F.text == "/stats")
+async def stats(message: Message):
+
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    total_users = len(users)
+
+    males = sum(
+        1 for gender in users.values()
+        if gender == "male"
+    )
+
+    females = sum(
+        1 for gender in users.values()
+        if gender == "female"
+    )
+
+    searching_now = len(searching)
+
+    chatting_now = len(partners) // 2
+
+    await message.answer(
+        "📊 Статистика бота\n\n"
+        f"👥 Всего пользователей: {total_users}\n"
+        f"👨 Мужчин: {males}\n"
+        f"👩 Женщин: {females}\n"
+        f"🔎 Ищут собеседника: {searching_now}\n"
+        f"💬 Сейчас общаются: {chatting_now}"
+    )
+
+
+# =========================
 # АНОНИМНЫЙ ЧАТ
 # =========================
 
@@ -262,24 +303,30 @@ async def anonymous_chat(message: Message):
     user_id = message.from_user.id
 
     if user_id not in users:
+
         await message.answer(
             "Сначала выбери свой пол:",
             reply_markup=gender_keyboard
         )
+
         return
 
     if user_id in searching:
+
         await message.answer(
             "🔎 Я пока ищу тебе собеседника..."
         )
+
         return
 
     if user_id not in partners:
+
         await message.answer(
             "У тебя сейчас нет собеседника.\n"
             "Нажми ⏭ Следующий.",
             reply_markup=chat_keyboard
         )
+
         return
 
     partner_id = partners.get(user_id)
@@ -288,6 +335,7 @@ async def anonymous_chat(message: Message):
         return
 
     try:
+
         await message.copy_to(partner_id)
 
     except Exception:
@@ -300,27 +348,6 @@ async def anonymous_chat(message: Message):
             "Нажми ⏭ Следующий.",
             reply_markup=chat_keyboard
         )
-ADMIN_ID = 6624599495
-
-@dp.message(F.text == "/stats")
-async def stats(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    total_users = len(users)
-    males = sum(1 for gender in users.values() if gender == "male")
-    females = sum(1 for gender in users.values() if gender == "female")
-    searching_now = len(searching)
-    chatting_now = len(partners) // 2
-
-    await message.answer(
-        "📊 Статистика бота\n\n"
-        f"👥 Всего пользователей: {total_users}\n"
-        f"👨 Мужчин: {males}\n"
-        f"👩 Женщин: {females}\n"
-        f"🔎 Ищут собеседника: {searching_now}\n"
-        f"💬 Сейчас общаются: {chatting_now}"
-    )
 
 
 # =========================
