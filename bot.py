@@ -19,20 +19,16 @@ dp = Dispatcher()
 # ДАННЫЕ
 # ==========================================
 
-# Все, кто запускал бота
 all_users = set()
-
-# user_id -> male / female
 users = {}
-
-# Кто ищет собеседника
 searching = set()
-
-# user_id -> partner_id
 partners = {}
-
-# user_id -> username
 usernames = {}
+
+# Режим поиска:
+# False = по полу
+# True = наугад
+random_mode = False
 
 
 # ==========================================
@@ -61,7 +57,10 @@ admin_keyboard = ReplyKeyboardMarkup(
             KeyboardButton(text="💬 Сейчас общаются")
         ],
         [
-            KeyboardButton(text="⏭ Следующий"),
+            KeyboardButton(text="🎲 Наугад"),
+            KeyboardButton(text="⏭ Следующий")
+        ],
+        [
             KeyboardButton(text="🛑 Завершить")
         ]
     ],
@@ -70,7 +69,7 @@ admin_keyboard = ReplyKeyboardMarkup(
 
 
 # ==========================================
-# КЛАВИАТУРА ОБЫЧНОГО ПОЛЬЗОВАТЕЛЯ
+# КЛАВИАТУРЫ ПОЛЬЗОВАТЕЛЯ
 # ==========================================
 
 gender_keyboard = ReplyKeyboardMarkup(
@@ -96,7 +95,7 @@ chat_keyboard = ReplyKeyboardMarkup(
 
 
 # ==========================================
-# ВЫБОР КЛАВИАТУРЫ
+# КЛАВИАТУРА
 # ==========================================
 
 def get_keyboard(user_id):
@@ -108,7 +107,7 @@ def get_keyboard(user_id):
 
 
 # ==========================================
-# ПОИСК ПАРТНЕРА
+# ПОИСК СОБЕСЕДНИКА
 # ==========================================
 
 def find_partner(user_id):
@@ -128,7 +127,17 @@ def find_partner(user_id):
         if not other_gender:
             continue
 
-        # Только противоположный пол
+        # ==================================
+        # РЕЖИМ НАУГАД
+        # ==================================
+
+        if random_mode:
+            return other_id
+
+        # ==================================
+        # ОБЫЧНЫЙ РЕЖИМ
+        # ==================================
+
         if my_gender != other_gender:
             return other_id
 
@@ -177,43 +186,23 @@ async def start(message: Message):
 
     user_id = message.from_user.id
 
-    # Записываем пользователя
     all_users.add(user_id)
 
-    # Записываем username
     if message.from_user.username:
         usernames[user_id] = message.from_user.username
 
-    # ======================================
     # АДМИН
-    # ======================================
-
     if user_id == ADMIN_ID:
 
-        # Если пол уже выбран
-        if user_id in users:
-
-            await message.answer(
-                "👑 Админ-панель\n\n"
-                "Ты можешь пользоваться ботом "
-                "как обычный участник.",
-                reply_markup=admin_keyboard
-            )
-
-        else:
-
-            await message.answer(
-                "👑 Добро пожаловать, администратор!\n\n"
-                "Сначала выбери свой пол:",
-                reply_markup=admin_keyboard
-            )
+        await message.answer(
+            "👑 Панель администратора\n\n"
+            "Выбери свой пол:",
+            reply_markup=admin_keyboard
+        )
 
         return
 
-    # ======================================
     # ОБЫЧНЫЙ ПОЛЬЗОВАТЕЛЬ
-    # ======================================
-
     if user_id in partners:
 
         await message.answer(
@@ -248,7 +237,7 @@ async def choose_male(message: Message):
 
     await message.answer(
         "✅ Ты указал: мужчина\n\n"
-        "🔎 Ищу девушку...",
+        "🔎 Ищу собеседника...",
         reply_markup=get_keyboard(user_id)
     )
 
@@ -273,11 +262,43 @@ async def choose_female(message: Message):
 
     await message.answer(
         "✅ Ты указала: женщина\n\n"
-        "🔎 Ищу мужчину...",
+        "🔎 Ищу собеседника...",
         reply_markup=get_keyboard(user_id)
     )
 
     await start_search(user_id)
+
+
+# ==========================================
+# НАУГАД
+# ==========================================
+
+@dp.message(F.text == "🎲 Наугад")
+async def random_mode_button(message: Message):
+
+    global random_mode
+
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    random_mode = not random_mode
+
+    if random_mode:
+
+        await message.answer(
+            "🎲 РЕЖИМ «НАУГАД» ВКЛЮЧЁН!\n\n"
+            "Теперь новые пары могут быть любого пола.\n"
+            "Уже общающиеся пары не разрываются.",
+            reply_markup=admin_keyboard
+        )
+
+    else:
+
+        await message.answer(
+            "🎲 РЕЖИМ «НАУГАД» ВЫКЛЮЧЕН!\n\n"
+            "Снова работает поиск по противоположному полу.",
+            reply_markup=admin_keyboard
+        )
 
 
 # ==========================================
@@ -304,8 +325,9 @@ async def send_stats(message: Message):
     without_gender = total_users - males - females
 
     searching_now = len(searching)
-
     chatting_now = len(partners) // 2
+
+    mode = "🎲 Наугад" if random_mode else "👫 По полу"
 
     await message.answer(
         "📊 СТАТИСТИКА БОТА\n\n"
@@ -314,7 +336,8 @@ async def send_stats(message: Message):
         f"👩 Женщин: {females}\n"
         f"❓ Без пола: {without_gender}\n\n"
         f"🔎 Сейчас ищут: {searching_now}\n"
-        f"💬 Сейчас общаются: {chatting_now}"
+        f"💬 Сейчас общаются: {chatting_now}\n\n"
+        f"⚙️ Режим: {mode}"
     )
 
 
@@ -357,10 +380,11 @@ async def participants(message: Message):
 
         username = usernames.get(user_id)
 
-        if username:
-            name = f"@{username}"
-        else:
-            name = "без username"
+        name = (
+            f"@{username}"
+            if username
+            else "без username"
+        )
 
         gender = users.get(user_id)
 
@@ -380,7 +404,6 @@ async def participants(message: Message):
         if len(text) > 3500:
 
             await message.answer(text)
-
             text = "👥 ПРОДОЛЖЕНИЕ\n\n"
 
     if text.strip() != "👥 ПРОДОЛЖЕНИЕ":
@@ -505,7 +528,6 @@ async def next_partner(message: Message):
 
     user_id = message.from_user.id
 
-    # Если уже есть собеседник
     if user_id in partners:
 
         old_partner = partners.get(user_id)
@@ -593,7 +615,7 @@ async def anonymous_chat(message: Message):
     if message.from_user.username:
         usernames[user_id] = message.from_user.username
 
-    # Если пол ещё не выбран
+    # Если пол не выбран
     if user_id not in users:
 
         await message.answer(
@@ -607,7 +629,7 @@ async def anonymous_chat(message: Message):
 
         return
 
-    # Если пользователь ищет
+    # Ищет
     if user_id in searching:
 
         await message.answer(
@@ -616,7 +638,7 @@ async def anonymous_chat(message: Message):
 
         return
 
-    # Если нет собеседника
+    # Нет пары
     if user_id not in partners:
 
         await message.answer(
