@@ -20,22 +20,21 @@ dp = Dispatcher()
 # ДАННЫЕ
 # ==========================================
 
-# Пользователи, которые запустили бота
+# Все пользователи, которые запускали бота
 all_users = set()
 
-# Пользователи + пол
-# user_id -> male/female
+# Пользователь -> пол
+# male / female
 users = {}
 
-# Кто сейчас ищет собеседника
+# Пользователи, которые ищут собеседника
 searching = set()
 
 # Пары
 # user_id -> partner_id
 partners = {}
 
-# Информация о пользователях
-# user_id -> username
+# Username пользователей
 usernames = {}
 
 
@@ -72,6 +71,10 @@ chat_keyboard = ReplyKeyboardMarkup(
 )
 
 
+# Админская клавиатура
+# Здесь есть и админские функции,
+# и управление обычным чатом.
+
 admin_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [
@@ -81,6 +84,10 @@ admin_keyboard = ReplyKeyboardMarkup(
         [
             KeyboardButton(text="🔎 Сейчас ищут"),
             KeyboardButton(text="💬 Сейчас общаются")
+        ],
+        [
+            KeyboardButton(text="⏭ Следующий"),
+            KeyboardButton(text="🛑 Завершить")
         ]
     ],
     resize_keyboard=True
@@ -133,18 +140,31 @@ async def start_search(user_id):
     partners[user_id] = partner_id
     partners[partner_id] = user_id
 
+    # Клавиатура для админа
+    keyboard_user = (
+        admin_keyboard
+        if user_id == ADMIN_ID
+        else chat_keyboard
+    )
+
+    keyboard_partner = (
+        admin_keyboard
+        if partner_id == ADMIN_ID
+        else chat_keyboard
+    )
+
     await bot.send_message(
         user_id,
         "🎉 Собеседник найден!\n\n"
         "Можете начинать общение.",
-        reply_markup=chat_keyboard
+        reply_markup=keyboard_user
     )
 
     await bot.send_message(
         partner_id,
         "🎉 Собеседник найден!\n\n"
         "Можете начинать общение.",
-        reply_markup=chat_keyboard
+        reply_markup=keyboard_partner
     )
 
 
@@ -157,22 +177,37 @@ async def start(message: Message):
 
     user_id = message.from_user.id
 
-    # Сохраняем всех, кто запустил бота
+    # Записываем пользователя
     all_users.add(user_id)
 
     # Сохраняем username
     if message.from_user.username:
         usernames[user_id] = message.from_user.username
 
-    # Если это администратор
+    # ======================================
+    # АДМИНИСТРАТОР
+    # ======================================
+
     if user_id == ADMIN_ID:
 
         await message.answer(
-            "👑 Панель администратора\n\n"
-            "Выбери действие:",
+            "👑 Админская панель\n\n"
+            "Ты также можешь пользоваться ботом "
+            "как обычный участник.\n\n"
+            "Сначала выбери свой пол:",
+            reply_markup=gender_keyboard
+        )
+
+        await message.answer(
+            "📊 Админские функции доступны после выбора пола.",
             reply_markup=admin_keyboard
         )
+
         return
+
+    # ======================================
+    # ОБЫЧНЫЙ ПОЛЬЗОВАТЕЛЬ
+    # ======================================
 
     if user_id in partners:
 
@@ -180,6 +215,7 @@ async def start(message: Message):
             "Ты уже общаешься с собеседником.",
             reply_markup=chat_keyboard
         )
+
         return
 
     await message.answer(
@@ -205,10 +241,16 @@ async def choose_male(message: Message):
 
     users[user_id] = "male"
 
+    keyboard = (
+        admin_keyboard
+        if user_id == ADMIN_ID
+        else chat_keyboard
+    )
+
     await message.answer(
         "✅ Ты указал: мужчина\n\n"
         "🔎 Ищу девушку...",
-        reply_markup=chat_keyboard
+        reply_markup=keyboard
     )
 
     await start_search(user_id)
@@ -230,94 +272,23 @@ async def choose_female(message: Message):
 
     users[user_id] = "female"
 
+    keyboard = (
+        admin_keyboard
+        if user_id == ADMIN_ID
+        else chat_keyboard
+    )
+
     await message.answer(
         "✅ Ты указала: женщина\n\n"
         "🔎 Ищу мужчину...",
-        reply_markup=chat_keyboard
+        reply_markup=keyboard
     )
 
     await start_search(user_id)
 
 
 # ==========================================
-# СЛЕДУЮЩИЙ
-# ==========================================
-
-@dp.message(F.text == "⏭ Следующий")
-async def next_partner(message: Message):
-
-    user_id = message.from_user.id
-
-    if user_id in partners:
-
-        old_partner = partners.get(user_id)
-
-        partners.pop(user_id, None)
-
-        if old_partner:
-            partners.pop(old_partner, None)
-
-            try:
-                await bot.send_message(
-                    old_partner,
-                    "👋 Собеседник завершил разговор.",
-                    reply_markup=chat_keyboard
-                )
-            except Exception:
-                pass
-
-    searching.discard(user_id)
-
-    await message.answer(
-        "🔎 Ищу нового собеседника...",
-        reply_markup=chat_keyboard
-    )
-
-    await start_search(user_id)
-
-
-# ==========================================
-# ЗАВЕРШИТЬ
-# ==========================================
-
-@dp.message(F.text == "🛑 Завершить")
-async def stop_chat(message: Message):
-
-    user_id = message.from_user.id
-
-    searching.discard(user_id)
-
-    partner_id = partners.get(user_id)
-
-    if partner_id:
-
-        partners.pop(user_id, None)
-        partners.pop(partner_id, None)
-
-        try:
-            await bot.send_message(
-                partner_id,
-                "👋 Собеседник завершил разговор.",
-                reply_markup=chat_keyboard
-            )
-        except Exception:
-            pass
-
-        await message.answer(
-            "🛑 Чат завершён.",
-            reply_markup=chat_keyboard
-        )
-
-    else:
-
-        await message.answer(
-            "🛑 Поиск остановлен.",
-            reply_markup=chat_keyboard
-        )
-
-
-# ==========================================
-# ФУНКЦИЯ СТАТИСТИКИ
+# СТАТИСТИКА
 # ==========================================
 
 async def send_stats(message: Message):
@@ -365,7 +336,7 @@ async def stats_button(message: Message):
 
 
 # ==========================================
-# КОМАНДА /stats
+# /stats
 # ==========================================
 
 @dp.message(F.text == "/stats")
@@ -389,14 +360,15 @@ async def participants(message: Message):
         await message.answer(
             "👥 Пока никто не запустил бота."
         )
+
         return
 
     text = "👥 УЧАСТНИКИ БОТА\n\n"
 
-    # Сортируем ID для удобства
-    user_list = sorted(all_users)
-
-    for number, user_id in enumerate(user_list, start=1):
+    for number, user_id in enumerate(
+        sorted(all_users),
+        start=1
+    ):
 
         username = usernames.get(user_id)
 
@@ -405,12 +377,23 @@ async def participants(message: Message):
         else:
             name = "без username"
 
+        if user_id in users:
+            gender = users[user_id]
+
+            if gender == "male":
+                gender_text = "👨 Мужчина"
+            else:
+                gender_text = "👩 Женщина"
+        else:
+            gender_text = "❓ Пол не указан"
+
         text += (
             f"{number}. {name}\n"
-            f"🆔 ID: {user_id}\n\n"
+            f"🆔 ID: {user_id}\n"
+            f"{gender_text}\n\n"
         )
 
-        # Telegram ограничивает размер сообщения
+        # Не превышаем лимит Telegram
         if len(text) > 3500:
 
             await message.answer(text)
@@ -423,7 +406,7 @@ async def participants(message: Message):
 
 
 # ==========================================
-# КТО СЕЙЧАС ИЩЕТ
+# СЕЙЧАС ИЩУТ
 # ==========================================
 
 @dp.message(F.text == "🔎 Сейчас ищут")
@@ -437,13 +420,14 @@ async def searching_users(message: Message):
         await message.answer(
             "🔎 Сейчас никто не ищет собеседника."
         )
+
         return
 
-    text = "🔎 СЕЙЧАС ИЩУТ СОБЕСЕДНИКА\n\n"
+    text = "🔎 СЕЙЧАС ИЩУТ\n\n"
 
     for user_id in searching:
 
-        gender = users.get(user_id, "не указан")
+        gender = users.get(user_id)
 
         if gender == "male":
             gender_text = "👨 Мужчина"
@@ -469,7 +453,7 @@ async def searching_users(message: Message):
 
 
 # ==========================================
-# КТО СЕЙЧАС ОБЩАЕТСЯ
+# СЕЙЧАС ОБЩАЮТСЯ
 # ==========================================
 
 @dp.message(F.text == "💬 Сейчас общаются")
@@ -483,6 +467,7 @@ async def chatting_users(message: Message):
         await message.answer(
             "💬 Сейчас никто не общается."
         )
+
         return
 
     text = "💬 СЕЙЧАС ОБЩАЮТСЯ\n\n"
@@ -492,8 +477,9 @@ async def chatting_users(message: Message):
 
     for user_id, partner_id in partners.items():
 
-        # Чтобы одну пару не показывать два раза
-        pair = tuple(sorted([user_id, partner_id]))
+        pair = tuple(
+            sorted([user_id, partner_id])
+        )
 
         if pair in shown:
             continue
@@ -503,8 +489,17 @@ async def chatting_users(message: Message):
         username1 = usernames.get(user_id)
         username2 = usernames.get(partner_id)
 
-        name1 = f"@{username1}" if username1 else "без username"
-        name2 = f"@{username2}" if username2 else "без username"
+        name1 = (
+            f"@{username1}"
+            if username1
+            else "без username"
+        )
+
+        name2 = (
+            f"@{username2}"
+            if username2
+            else "без username"
+        )
 
         text += (
             f"💬 Пара #{number}\n"
@@ -515,6 +510,112 @@ async def chatting_users(message: Message):
         number += 1
 
     await message.answer(text)
+
+
+# ==========================================
+# СЛЕДУЮЩИЙ
+# ==========================================
+
+@dp.message(F.text == "⏭ Следующий")
+async def next_partner(message: Message):
+
+    user_id = message.from_user.id
+
+    if user_id in partners:
+
+        old_partner = partners.get(user_id)
+
+        partners.pop(user_id, None)
+
+        if old_partner:
+
+            partners.pop(old_partner, None)
+
+            try:
+
+                partner_keyboard = (
+                    admin_keyboard
+                    if old_partner == ADMIN_ID
+                    else chat_keyboard
+                )
+
+                await bot.send_message(
+                    old_partner,
+                    "👋 Собеседник завершил разговор.",
+                    reply_markup=partner_keyboard
+                )
+
+            except Exception:
+                pass
+
+    searching.discard(user_id)
+
+    keyboard = (
+        admin_keyboard
+        if user_id == ADMIN_ID
+        else chat_keyboard
+    )
+
+    await message.answer(
+        "🔎 Ищу нового собеседника...",
+        reply_markup=keyboard
+    )
+
+    await start_search(user_id)
+
+
+# ==========================================
+# ЗАВЕРШИТЬ
+# ==========================================
+
+@dp.message(F.text == "🛑 Завершить")
+async def stop_chat(message: Message):
+
+    user_id = message.from_user.id
+
+    searching.discard(user_id)
+
+    partner_id = partners.get(user_id)
+
+    keyboard = (
+        admin_keyboard
+        if user_id == ADMIN_ID
+        else chat_keyboard
+    )
+
+    if partner_id:
+
+        partners.pop(user_id, None)
+        partners.pop(partner_id, None)
+
+        try:
+
+            partner_keyboard = (
+                admin_keyboard
+                if partner_id == ADMIN_ID
+                else chat_keyboard
+            )
+
+            await bot.send_message(
+                partner_id,
+                "👋 Собеседник завершил разговор.",
+                reply_markup=partner_keyboard
+            )
+
+        except Exception:
+            pass
+
+        await message.answer(
+            "🛑 Чат завершён.",
+            reply_markup=keyboard
+        )
+
+    else:
+
+        await message.answer(
+            "🛑 Поиск остановлен.",
+            reply_markup=keyboard
+        )
 
 
 # ==========================================
@@ -532,7 +633,8 @@ async def anonymous_chat(message: Message):
     if message.from_user.username:
         usernames[user_id] = message.from_user.username
 
-    # Администраторские кнопки
+    # Админские кнопки обрабатываются
+    # отдельными handlers выше.
     if user_id == ADMIN_ID:
 
         admin_buttons = [
@@ -545,6 +647,7 @@ async def anonymous_chat(message: Message):
         if message.text in admin_buttons:
             return
 
+    # Если пользователь не выбрал пол
     if user_id not in users:
 
         await message.answer(
@@ -554,6 +657,7 @@ async def anonymous_chat(message: Message):
 
         return
 
+    # Пока ищет
     if user_id in searching:
 
         await message.answer(
@@ -562,12 +666,19 @@ async def anonymous_chat(message: Message):
 
         return
 
+    # Нет партнёра
     if user_id not in partners:
+
+        keyboard = (
+            admin_keyboard
+            if user_id == ADMIN_ID
+            else chat_keyboard
+        )
 
         await message.answer(
             "У тебя сейчас нет собеседника.\n"
             "Нажми ⏭ Следующий.",
-            reply_markup=chat_keyboard
+            reply_markup=keyboard
         )
 
         return
@@ -586,10 +697,16 @@ async def anonymous_chat(message: Message):
         partners.pop(user_id, None)
         partners.pop(partner_id, None)
 
+        keyboard = (
+            admin_keyboard
+            if user_id == ADMIN_ID
+            else chat_keyboard
+        )
+
         await message.answer(
             "❌ Не удалось отправить сообщение.\n"
             "Нажми ⏭ Следующий.",
-            reply_markup=chat_keyboard
+            reply_markup=keyboard
         )
 
 
