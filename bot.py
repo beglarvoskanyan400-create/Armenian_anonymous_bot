@@ -1,23 +1,52 @@
+
 import asyncio
 import os
+import sqlite3
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
 
+# ==========================================
+# НАСТРОЙКИ
+# ==========================================
+
 TOKEN = os.getenv("TOKEN")
 
 if not TOKEN:
     raise RuntimeError("TOKEN not found")
 
+# DB_PATH должен указывать на постоянное хранилище FadeHost.
+DB_PATH = os.getenv("DB_PATH", "bot_users.db")
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+ADMIN_ID = 6624599495
+
 
 # ==========================================
-# ДАННЫЕ
+# БАЗА ДАННЫХ SQLITE
 # ==========================================
+
+db = sqlite3.connect(DB_PATH)
+
+db.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        gender TEXT,
+        username TEXT
+    )
+""")
+
+db.commit()
+
+
+# Загружаем ранее зарегистрированных пользователей.
+rows = db.execute(
+    "SELECT user_id, gender, username FROM users"
+).fetchall()
 
 all_users = set()
 users = {}
@@ -25,17 +54,45 @@ searching = set()
 partners = {}
 usernames = {}
 
-# Режим поиска:
-# False = по полу
-# True = наугад
+for user_id, gender, username in rows:
+    all_users.add(user_id)
+
+    if gender:
+        users[user_id] = gender
+
+    if username:
+        usernames[user_id] = username
+
+
+def save_user(user_id, gender=None, username=None):
+    """Сохраняет пользователя и его данные в SQLite."""
+
+    all_users.add(user_id)
+
+    if gender:
+        users[user_id] = gender
+
+    if username:
+        usernames[user_id] = username
+
+    db.execute("""
+        INSERT INTO users (user_id, gender, username)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            gender = COALESCE(excluded.gender, users.gender),
+            username = COALESCE(excluded.username, users.username)
+    """, (user_id, gender, username))
+
+    db.commit()
+
+
+# ==========================================
+# РЕЖИМ ПОИСКА
+# ==========================================
+
+# False = поиск по противоположному полу
+# True = поиск наугад
 random_mode = False
-
-
-# ==========================================
-# АДМИН
-# ==========================================
-
-ADMIN_ID = 6624599495
 
 
 # ==========================================
@@ -82,7 +139,6 @@ gender_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-
 chat_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [
@@ -94,15 +150,9 @@ chat_keyboard = ReplyKeyboardMarkup(
 )
 
 
-# ==========================================
-# КЛАВИАТУРА
-# ==========================================
-
 def get_keyboard(user_id):
-
     if user_id == ADMIN_ID:
         return admin_keyboard
-
     return chat_keyboard
 
 
@@ -111,14 +161,12 @@ def get_keyboard(user_id):
 # ==========================================
 
 def find_partner(user_id):
-
     my_gender = users.get(user_id)
 
     if not my_gender:
         return None
 
     for other_id in list(searching):
-
         if other_id == user_id:
             continue
 
@@ -127,16 +175,8 @@ def find_partner(user_id):
         if not other_gender:
             continue
 
-        # ==================================
-        # РЕЖИМ НАУГАД
-        # ==================================
-
         if random_mode:
             return other_id
-
-        # ==================================
-        # ОБЫЧНЫЙ РЕЖИМ
-        # ==================================
 
         if my_gender != other_gender:
             return other_id
@@ -145,12 +185,10 @@ def find_partner(user_id):
 
 
 async def start_search(user_id):
-
     if user_id in partners:
         return
 
     searching.add(user_id)
-
     partner_id = find_partner(user_id)
 
     if partner_id is None:
@@ -162,19 +200,27 @@ async def start_search(user_id):
     partners[user_id] = partner_id
     partners[partner_id] = user_id
 
-    await bot.send_message(
-        user_id,
-        "🎉 Собеседник найден!\n\n"
-        "Можете начинать общение.",
-        reply_markup=get_keyboard(user_id)
-    )
+    try:
+        await bot.send_message(
+            user_id,
+            "🎉 Собеседник найден!\n\nМожете начинать общение.",
+            reply_markup=get_keyboard(user_id)
+        )
 
-    await bot.send_message(
-        partner_id,
-        "🎉 Собеседник найден!\n\n"
-        "Можете начинать общение.",
-        reply_markup=get_keyboard(partner_id)
-    )
+        await bot.send_message(
+            partner_id,
+            "🎉 Собеседник найден!\n\nМожете начинать общение.",
+            reply_markup=get_keyboard(partner_id)
+        )
+
+    except Exception as error:
+        print(f"Ошибка создания чата: {error}")
+
+        partners.pop(user_id, None)
+        partners.pop(partner_id, None)
+
+        searching.discard(user_id)
+        searching.discard(partner_id)
 
 
 # ==========================================
@@ -183,33 +229,26 @@ async def start_search(user_id):
 
 @dp.message(CommandStart())
 async def start(message: Message):
-
     user_id = message.from_user.id
 
-    all_users.add(user_id)
+    save_user(
+        user_id,
+        users.get(user_id),
+        message.from_user.username
+    )
 
-    if message.from_user.username:
-        usernames[user_id] = message.from_user.username
-
-    # АДМИН
     if user_id == ADMIN_ID:
-
         await message.answer(
-            "👑 Панель администратора\n\n"
-            "Выбери свой пол:",
+            "👑 Панель администратора\n\nВыбери свой пол:",
             reply_markup=admin_keyboard
         )
-
         return
 
-    # ОБЫЧНЫЙ ПОЛЬЗОВАТЕЛЬ
     if user_id in partners:
-
         await message.answer(
             "Ты уже общаешься с собеседником.",
             reply_markup=chat_keyboard
         )
-
         return
 
     await message.answer(
@@ -220,24 +259,21 @@ async def start(message: Message):
 
 
 # ==========================================
-# МУЖЧИНА
+# ВЫБОР ПОЛА: МУЖЧИНА
 # ==========================================
 
 @dp.message(F.text == "👨 Мужчина")
 async def choose_male(message: Message):
-
     user_id = message.from_user.id
 
-    all_users.add(user_id)
-
-    if message.from_user.username:
-        usernames[user_id] = message.from_user.username
-
-    users[user_id] = "male"
+    save_user(
+        user_id,
+        "male",
+        message.from_user.username
+    )
 
     await message.answer(
-        "✅ Ты указал: мужчина\n\n"
-        "🔎 Ищу собеседника...",
+        "✅ Ты указал: мужчина\n\n🔎 Ищу собеседника...",
         reply_markup=get_keyboard(user_id)
     )
 
@@ -245,24 +281,21 @@ async def choose_male(message: Message):
 
 
 # ==========================================
-# ЖЕНЩИНА
+# ВЫБОР ПОЛА: ЖЕНЩИНА
 # ==========================================
 
 @dp.message(F.text == "👩 Женщина")
 async def choose_female(message: Message):
-
     user_id = message.from_user.id
 
-    all_users.add(user_id)
-
-    if message.from_user.username:
-        usernames[user_id] = message.from_user.username
-
-    users[user_id] = "female"
+    save_user(
+        user_id,
+        "female",
+        message.from_user.username
+    )
 
     await message.answer(
-        "✅ Ты указала: женщина\n\n"
-        "🔎 Ищу собеседника...",
+        "✅ Ты указала: женщина\n\n🔎 Ищу собеседника...",
         reply_markup=get_keyboard(user_id)
     )
 
@@ -270,12 +303,11 @@ async def choose_female(message: Message):
 
 
 # ==========================================
-# НАУГАД
+# РЕЖИМ НАУГАД
 # ==========================================
 
 @dp.message(F.text == "🎲 Наугад")
 async def random_mode_button(message: Message):
-
     global random_mode
 
     if message.from_user.id != ADMIN_ID:
@@ -284,16 +316,13 @@ async def random_mode_button(message: Message):
     random_mode = not random_mode
 
     if random_mode:
-
         await message.answer(
             "🎲 РЕЖИМ «НАУГАД» ВКЛЮЧЁН!\n\n"
-            "Теперь новые пары могут быть любого пола.\n"
-            "Уже общающиеся пары не разрываются.",
+            "Новые пары могут быть любого пола.\n"
+            "Существующие пары не разрываются.",
             reply_markup=admin_keyboard
         )
-
     else:
-
         await message.answer(
             "🎲 РЕЖИМ «НАУГАД» ВЫКЛЮЧЕН!\n\n"
             "Снова работает поиск по противоположному полу.",
@@ -306,21 +335,13 @@ async def random_mode_button(message: Message):
 # ==========================================
 
 async def send_stats(message: Message):
-
     if message.from_user.id != ADMIN_ID:
         return
 
     total_users = len(all_users)
 
-    males = sum(
-        1 for gender in users.values()
-        if gender == "male"
-    )
-
-    females = sum(
-        1 for gender in users.values()
-        if gender == "female"
-    )
+    males = sum(1 for gender in users.values() if gender == "male")
+    females = sum(1 for gender in users.values() if gender == "female")
 
     without_gender = total_users - males - females
 
@@ -343,13 +364,11 @@ async def send_stats(message: Message):
 
 @dp.message(F.text == "📊 Статистика")
 async def stats_button(message: Message):
-
     await send_stats(message)
 
 
 @dp.message(F.text == "/stats")
 async def stats_command(message: Message):
-
     await send_stats(message)
 
 
@@ -359,32 +378,18 @@ async def stats_command(message: Message):
 
 @dp.message(F.text == "👥 Участники")
 async def participants(message: Message):
-
     if message.from_user.id != ADMIN_ID:
         return
 
     if not all_users:
-
-        await message.answer(
-            "👥 Пока никто не запустил бота."
-        )
-
+        await message.answer("👥 Пока никто не запустил бота.")
         return
 
     text = "👥 УЧАСТНИКИ\n\n"
 
-    for number, user_id in enumerate(
-        sorted(all_users),
-        start=1
-    ):
-
+    for number, user_id in enumerate(sorted(all_users), start=1):
         username = usernames.get(user_id)
-
-        name = (
-            f"@{username}"
-            if username
-            else "без username"
-        )
+        name = f"@{username}" if username else "без username"
 
         gender = users.get(user_id)
 
@@ -402,12 +407,10 @@ async def participants(message: Message):
         )
 
         if len(text) > 3500:
-
             await message.answer(text)
             text = "👥 ПРОДОЛЖЕНИЕ\n\n"
 
     if text.strip() != "👥 ПРОДОЛЖЕНИЕ":
-
         await message.answer(text)
 
 
@@ -417,29 +420,18 @@ async def participants(message: Message):
 
 @dp.message(F.text == "🔎 Сейчас ищут")
 async def searching_list(message: Message):
-
     if message.from_user.id != ADMIN_ID:
         return
 
     if not searching:
-
-        await message.answer(
-            "🔎 Сейчас никто не ищет собеседника."
-        )
-
+        await message.answer("🔎 Сейчас никто не ищет собеседника.")
         return
 
     text = "🔎 СЕЙЧАС ИЩУТ\n\n"
 
     for user_id in searching:
-
         username = usernames.get(user_id)
-
-        name = (
-            f"@{username}"
-            if username
-            else "без username"
-        )
+        name = f"@{username}" if username else "без username"
 
         gender = users.get(user_id)
 
@@ -465,28 +457,19 @@ async def searching_list(message: Message):
 
 @dp.message(F.text == "💬 Сейчас общаются")
 async def chatting_list(message: Message):
-
     if message.from_user.id != ADMIN_ID:
         return
 
     if not partners:
-
-        await message.answer(
-            "💬 Сейчас никто не общается."
-        )
-
+        await message.answer("💬 Сейчас никто не общается.")
         return
 
     text = "💬 СЕЙЧАС ОБЩАЮТСЯ\n\n"
-
     shown = set()
     number = 1
 
     for user_id, partner_id in partners.items():
-
-        pair = tuple(
-            sorted([user_id, partner_id])
-        )
+        pair = tuple(sorted([user_id, partner_id]))
 
         if pair in shown:
             continue
@@ -496,17 +479,8 @@ async def chatting_list(message: Message):
         username1 = usernames.get(user_id)
         username2 = usernames.get(partner_id)
 
-        name1 = (
-            f"@{username1}"
-            if username1
-            else "без username"
-        )
-
-        name2 = (
-            f"@{username2}"
-            if username2
-            else "без username"
-        )
+        name1 = f"@{username1}" if username1 else "без username"
+        name2 = f"@{username2}" if username2 else "без username"
 
         text += (
             f"💬 Пара #{number}\n"
@@ -516,40 +490,45 @@ async def chatting_list(message: Message):
 
         number += 1
 
-    await message.answer(text)
+        if len(text) > 3500:
+            await message.answer(text)
+            text = "💬 ПРОДОЛЖЕНИЕ\n\n"
+
+    if text.strip() != "💬 ПРОДОЛЖЕНИЕ":
+        await message.answer(text)
 
 
 # ==========================================
-# СЛЕДУЮЩИЙ
+# СЛЕДУЮЩИЙ СОБЕСЕДНИК
 # ==========================================
 
 @dp.message(F.text == "⏭ Следующий")
 async def next_partner(message: Message):
-
     user_id = message.from_user.id
 
     if user_id in partners:
-
-        old_partner = partners.get(user_id)
-
-        partners.pop(user_id, None)
+        old_partner = partners.pop(user_id, None)
 
         if old_partner:
-
             partners.pop(old_partner, None)
 
             try:
-
                 await bot.send_message(
                     old_partner,
                     "👋 Собеседник завершил разговор.",
                     reply_markup=get_keyboard(old_partner)
                 )
-
             except Exception:
                 pass
 
     searching.discard(user_id)
+
+    if user_id not in users:
+        await message.answer(
+            "Сначала выбери свой пол:",
+            reply_markup=gender_keyboard
+        )
+        return
 
     await message.answer(
         "🔎 Ищу нового собеседника...",
@@ -560,31 +539,26 @@ async def next_partner(message: Message):
 
 
 # ==========================================
-# ЗАВЕРШИТЬ
+# ЗАВЕРШИТЬ ЧАТ
 # ==========================================
 
 @dp.message(F.text == "🛑 Завершить")
 async def stop_chat(message: Message):
-
     user_id = message.from_user.id
 
     searching.discard(user_id)
 
-    partner_id = partners.get(user_id)
+    partner_id = partners.pop(user_id, None)
 
     if partner_id:
-
-        partners.pop(user_id, None)
         partners.pop(partner_id, None)
 
         try:
-
             await bot.send_message(
                 partner_id,
                 "👋 Собеседник завершил разговор.",
                 reply_markup=get_keyboard(partner_id)
             )
-
         except Exception:
             pass
 
@@ -592,9 +566,7 @@ async def stop_chat(message: Message):
             "🛑 Чат завершён.",
             reply_markup=get_keyboard(user_id)
         )
-
     else:
-
         await message.answer(
             "🛑 Поиск остановлен.",
             reply_markup=get_keyboard(user_id)
@@ -607,17 +579,15 @@ async def stop_chat(message: Message):
 
 @dp.message()
 async def anonymous_chat(message: Message):
-
     user_id = message.from_user.id
 
-    all_users.add(user_id)
+    save_user(
+        user_id,
+        users.get(user_id),
+        message.from_user.username
+    )
 
-    if message.from_user.username:
-        usernames[user_id] = message.from_user.username
-
-    # Если пол не выбран
     if user_id not in users:
-
         await message.answer(
             "Сначала выбери свой пол:",
             reply_markup=(
@@ -626,27 +596,18 @@ async def anonymous_chat(message: Message):
                 else gender_keyboard
             )
         )
-
         return
 
-    # Ищет
     if user_id in searching:
-
-        await message.answer(
-            "🔎 Я пока ищу тебе собеседника..."
-        )
-
+        await message.answer("🔎 Я пока ищу тебе собеседника...")
         return
 
-    # Нет пары
     if user_id not in partners:
-
         await message.answer(
             "У тебя сейчас нет собеседника.\n"
             "Нажми ⏭ Следующий.",
             reply_markup=get_keyboard(user_id)
         )
-
         return
 
     partner_id = partners.get(user_id)
@@ -655,10 +616,9 @@ async def anonymous_chat(message: Message):
         return
 
     try:
-
         await message.copy_to(partner_id)
-
-    except Exception:
+    except Exception as error:
+        print(f"Ошибка отправки сообщения: {error}")
 
         partners.pop(user_id, None)
         partners.pop(partner_id, None)
@@ -670,14 +630,17 @@ async def anonymous_chat(message: Message):
 
 
 # ==========================================
-# ЗАПУСК
+# ЗАКРЫТИЕ БАЗЫ ПРИ ОСТАНОВКЕ
 # ==========================================
 
 async def main():
-
     print("Bot started!")
 
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        db.close()
+        await bot.session.close()
 
 
 if __name__ == "__main__":
